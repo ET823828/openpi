@@ -38,6 +38,11 @@ class B1KPolicyWrapper:
         self.sequence_lengths = None  # Shape: (batch, max_sequences) - total length of each sequence
         self.num_active_sequences = None  # Shape: (batch,) - number of active sequences per batch element
         self.step_counter = None  # Shape: (batch,)
+        self.last_action_provenance = None
+        self._request_index = 0
+        self._active_request_index = None
+        self._plan_id = -1
+        self._source_request_index = None
 
     def reset(self):
         self.batch_size = None
@@ -46,7 +51,35 @@ class B1KPolicyWrapper:
         self.sequence_lengths = None
         self.num_active_sequences = None
         self.step_counter = None
+        self.last_action_provenance = None
+        self._request_index = 0
+        self._active_request_index = None
+        self._plan_id = -1
+        self._source_request_index = None
         self.policy.reset()
+
+    def _record_action_provenance(self, *, current_observation_used: bool, action_index_in_plan: int) -> None:
+        """Publish causal provenance for the single-environment challenge protocol."""
+        if self.batch_size != 1 or self._active_request_index is None:
+            self.last_action_provenance = None
+            return
+        if current_observation_used:
+            self._plan_id += 1
+            self._source_request_index = self._active_request_index
+        if self._source_request_index is None:
+            self.last_action_provenance = None
+            return
+        self.last_action_provenance = {
+            "schema": "b1k_action_provenance_v1",
+            "status": (
+                "current_observation_used" if current_observation_used else "current_observation_not_used"
+            ),
+            "inference_executed": current_observation_used,
+            "request_index": self._active_request_index,
+            "source_request_index": self._source_request_index,
+            "plan_id": self._plan_id,
+            "action_index_in_plan": int(action_index_in_plan),
+        }
 
     def _ensure_batch_initialized(self, batch_size: int, action_dim: int = None):
         """Ensure buffers are initialized for the given batch size."""
@@ -153,6 +186,10 @@ class B1KPolicyWrapper:
         batch_range = np.arange(batch_size)
         current_indices = self.sequence_indices[batch_range, 0]
         final_actions = self.action_buffer[batch_range, 0, current_indices]
+        self._record_action_provenance(
+            current_observation_used=bool(needs_inference[0]) if batch_size == 1 else False,
+            action_index_in_plan=int(current_indices[0]) if batch_size == 1 else 0,
+        )
 
         # Increment indices (vectorized)
         self.sequence_indices[:, 0] += 1
@@ -355,11 +392,16 @@ class B1KPolicyWrapper:
 
     def act(self, input_obs):
         """Dispatch to the appropriate action method based on control mode."""
-        if self.control_mode == "receding_temporal":
-            return self.act_receding_temporal(input_obs)
-        elif self.control_mode == "receding_horizon":
-            return self.act_receding_horizon(input_obs)
-        elif self.control_mode == "temporal_ensemble":
-            return self.act_temporal_ensemble(input_obs)
-        else:
+        self.last_action_provenance = None
+        self._active_request_index = self._request_index
+        self._request_index += 1
+        try:
+            if self.control_mode == "receding_temporal":
+                return self.act_receding_temporal(input_obs)
+            if self.control_mode == "receding_horizon":
+                return self.act_receding_horizon(input_obs)
+            if self.control_mode == "temporal_ensemble":
+                return self.act_temporal_ensemble(input_obs)
             raise ValueError(f"Unknown control mode: {self.control_mode}")
+        finally:
+            self._active_request_index = None
