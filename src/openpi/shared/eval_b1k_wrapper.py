@@ -305,6 +305,10 @@ class B1KPolicyWrapper:
                 self.sequence_lengths[b, :active_count] = self.sequence_lengths[b, active_indices]
                 self.num_active_sequences[b] = active_count
 
+        self._record_action_provenance(
+            current_observation_used=bool(needs_replan[0]) if batch_size == 1 else False,
+            action_index_in_plan=int(self.step_counter[0] % self.action_horizon) if batch_size == 1 else 0,
+        )
         self.step_counter += 1
         if not batched:
             final_actions = final_actions[0]
@@ -388,6 +392,7 @@ class B1KPolicyWrapper:
 
         if not batched:
             final_actions = final_actions[0]
+        self._record_action_provenance(current_observation_used=True, action_index_in_plan=0)
         return torch.from_numpy(final_actions)
 
     def act(self, input_obs):

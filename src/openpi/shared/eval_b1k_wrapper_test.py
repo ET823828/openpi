@@ -66,3 +66,53 @@ def test_receding_horizon_reports_current_observation_only_on_replan():
         1,
         0,
     ]
+
+
+def test_receding_temporal_reports_current_observation_only_on_replan():
+    policy = _FakePolicy()
+    wrapper = B1KPolicyWrapper(
+        policy=policy,
+        robot="b1k/R1Pro",
+        text_prompt="Turn on the radio.",
+        control_mode="receding_temporal",
+        action_horizon=2,
+        max_len=32,
+    )
+
+    rows = []
+    for _ in range(3):
+        wrapper.act(_observation())
+        rows.append(dict(wrapper.last_action_provenance))
+
+    assert policy.infer_count == 3
+    assert [row["status"] for row in rows] == [
+        "current_observation_used",
+        "current_observation_not_used",
+        "current_observation_used",
+    ]
+    assert [row["request_index"] for row in rows] == [0, 1, 2]
+    assert [row["source_request_index"] for row in rows] == [0, 0, 2]
+    assert [row["plan_id"] for row in rows] == [0, 0, 1]
+
+
+def test_temporal_ensemble_reports_every_request_as_current_observation():
+    policy = _FakePolicy()
+    wrapper = B1KPolicyWrapper(
+        policy=policy,
+        robot="b1k/R1Pro",
+        text_prompt="Turn on the radio.",
+        control_mode="temporal_ensemble",
+        action_horizon=2,
+        max_len=32,
+    )
+
+    rows = []
+    for _ in range(2):
+        wrapper.act(_observation())
+        rows.append(dict(wrapper.last_action_provenance))
+
+    assert policy.infer_count == 2
+    assert [row["status"] for row in rows] == ["current_observation_used"] * 2
+    assert [row["request_index"] for row in rows] == [0, 1]
+    assert [row["source_request_index"] for row in rows] == [0, 1]
+    assert [row["plan_id"] for row in rows] == [0, 1]
